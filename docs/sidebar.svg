@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="392" viewBox="0 0 920 392" role="img" aria-label="herdr sidebar before and after: five spaces all labelled api-server become five distinct task names">
+  <title>herdr Spaces sidebar, before and after Space Topic</title>
+  <desc>Before: five spaces in one repo all read the same directory name. After: each space reads the live topic of the agent working inside it.</desc>
+
+  <defs>
+    <style>
+      .mono { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+      .panel-bg { fill: #0d1117; }
+      .card { fill: #161b22; stroke: #30363d; stroke-width: 1; }
+      .cap { fill: #8b949e; font-size: 13px; letter-spacing: .08em; }
+      .hdr { fill: #6e7681; font-size: 11px; letter-spacing: .14em; }
+      .num { fill: #6e7681; font-size: 13px; }
+      .dim { fill: #7d8590; font-size: 13.5px; }
+      .lit { fill: #e6edf3; font-size: 13.5px; }
+      .foot { fill: #6e7681; font-size: 12px; }
+      .row-active { fill: #1f6feb; fill-opacity: .12; }
+    </style>
+  </defs>
+
+  <rect width="920" height="392" rx="10" class="panel-bg"/>
+
+  <!-- ================= before ================= -->
+  <text x="40" y="44" class="mono cap">before</text>
+  <rect x="40" y="58" width="390" height="252" rx="8" class="card"/>
+  <text x="60" y="84" class="mono hdr">SPACES</text>
+
+  <g class="mono">
+    <text x="60" y="118" class="num">1</text><text x="84" y="118" class="dim">api-server</text>
+    <circle cx="404" cy="113.5" r="4" fill="#3fb950"/>
+
+    <text x="60" y="152" class="num">2</text><text x="84" y="152" class="dim">api-server</text>
+    <circle cx="404" cy="147.5" r="4" fill="#58a6ff"/>
+
+    <text x="60" y="186" class="num">3</text><text x="84" y="186" class="dim">api-server</text>
+    <circle cx="404" cy="181.5" r="4" fill="#d29922"/>
+
+    <text x="60" y="220" class="num">4</text><text x="84" y="220" class="dim">api-server</text>
+    <circle cx="404" cy="215.5" r="4" fill="#3fb950"/>
+
+    <text x="60" y="254" class="num">5</text><text x="84" y="254" class="dim">api-server</text>
+    <circle cx="404" cy="249.5" r="4" fill="#d29922"/>
+
+    <text x="60" y="288" class="num">6</text><text x="84" y="288" class="dim">api-server</text>
+    <circle cx="404" cy="283.5" r="4" fill="#58a6ff"/>
+  </g>
+
+  <!-- ================= arrow ================= -->
+  <g transform="translate(460, 178)">
+    <path d="M0 6 H36" stroke="#30363d" stroke-width="2" stroke-linecap="round"/>
+    <path d="M28 0 L36 6 L28 12" fill="none" stroke="#30363d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- ================= after ================= -->
+  <text x="530" y="44" class="mono cap">after</text>
+  <rect x="530" y="58" width="350" height="252" rx="8" class="card"/>
+  <text x="550" y="84" class="mono hdr">SPACES</text>
+
+  <rect x="531" y="199" width="348" height="28" class="row-active"/>
+
+  <g class="mono">
+    <text x="550" y="118" class="num">1</text><text x="574" y="118" class="lit">Fix flaky auth test</text>
+    <circle cx="856" cy="113.5" r="4" fill="#3fb950"/>
+
+    <text x="550" y="152" class="num">2</text><text x="574" y="152" class="lit">Draft release notes</text>
+    <circle cx="856" cy="147.5" r="4" fill="#58a6ff"/>
+
+    <text x="550" y="186" class="num">3</text><text x="574" y="186" class="lit">Bump k8s client</text>
+    <circle cx="856" cy="181.5" r="4" fill="#d29922"/>
+
+    <text x="550" y="220" class="num">4</text><text x="574" y="220" class="lit">Repro issue #482</text>
+    <circle cx="856" cy="215.5" r="4" fill="#3fb950"/>
+
+    <text x="550" y="254" class="num">5</text><text x="574" y="254" class="lit">Wire up OTLP export</text>
+    <circle cx="856" cy="249.5" r="4" fill="#d29922"/>
+
+    <text x="550" y="288" class="num">6</text><text x="574" y="288" class="lit">Port installer to arm64</text>
+    <circle cx="856" cy="283.5" r="4" fill="#58a6ff"/>
+  </g>
+
+  <!-- ================= footer ================= -->
+  <text x="40" y="346" class="mono foot">Six worktrees of one repo. herdr names a Space after its directory; Space Topic names it after</text>
+  <text x="40" y="366" class="mono foot">the live topic of the agent working inside it.</text>
+</svg>

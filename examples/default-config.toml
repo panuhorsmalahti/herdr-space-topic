@@ -1,0 +1,71 @@
+# Space Topic -- configuration
+#
+# Copy to your plugin config dir to customize:
+#   cp examples/default-config.toml "$(herdr plugin config-dir phorsmalahti.space-topic)/config.toml"
+#
+# All keys are optional; omitted keys use the defaults shown here.
+
+# Turn the plugin off without unlinking it. Events still fire; the script exits
+# immediately. `--restore` still works while disabled.
+enabled = true
+
+# How the topic reaches the sidebar.
+#   "rename" -- overwrite the Space label. Zero setup, works with the default
+#               sidebar. Your original label is remembered for `restore`.
+#   "token"  -- leave the label alone and publish the topic as a workspace
+#               token. Non-destructive, but you must place `$topic` in a Space
+#               sidebar row yourself (see ui.space_rows in the herdr config).
+#   "both"   -- do the two.
+mode = "rename"
+
+# Token name used by mode = "token" / "both". `$topic` in a Space row.
+token_name = "topic"
+
+# Which pane speaks for a Space:
+#   "first"  = reading order -- lowest tab number, then top-left
+#   "active" = the pane herdr has focused inside that Space
+# Either way, a pane that is an agent AND has a topic wins over one that is
+# only an agent, so a leading shell pane does not silence the Space.
+source = "first"
+
+# What a Space reads when no agent topic is available (agent still starting,
+# plain shell, agent exited):
+#   "original" = the label herdr derived from the directory
+#   "branch"   = the current Git branch of the lead pane's cwd
+#   "cwd"      = the lead pane's directory basename
+#   "keep"     = leave whatever is on screen, write nothing
+fallback = "original"
+
+# Label template. Tokens are substituted; unknown tokens are left literal.
+#   {topic}     the agent's live topic (terminal_title_stripped)
+#   {agent}     the agent name (e.g. "claude", "codex")
+#   {original}  the label the Space had before this plugin first saw it
+#   {branch}    Git branch of the lead pane's cwd ("" outside a repo)
+#   {cwd}       basename of the lead pane's directory
+#   {number}    the Space's switch number (prefix+shift+N)
+#   {status}    idle | working | blocked | done | unknown
+#
+# Examples:
+#   format = "{topic}"                -> "Fix flaky auth test"
+#   format = "{agent} › {topic}"      -> "claude › Fix flaky auth test"
+#   format = "{branch} · {topic}"     -> "fix-auth · Fix flaky auth test"
+#   format = "{number}· {topic}"      -> "2· Fix flaky auth test"
+format = "{topic}"
+
+# Truncate longer labels (an ellipsis is appended). Applied after formatting,
+# so it caps the final label including any prefix. Clamped to 8..80.
+max_label_length = 40
+
+# Never overwrite a Space you renamed by hand. Once you rename one yourself,
+# the plugin leaves it alone -- its name is yours until you hand it back, by
+# renaming it to its original label or running the "Adopt this space" action.
+# Set false to have every Space overwritten on the next event.
+respect_manual_names = true
+
+# Only manage Spaces that host an agent. Set false to also name plain shell
+# Spaces from `fallback`.
+require_agent = true
+
+# Workspace ids or exact labels this plugin must never touch. Useful for a
+# home/scratch Space you always want to find under the same name.
+skip = []

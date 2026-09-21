@@ -1,0 +1,114 @@
+id = "phorsmalahti.space-topic"
+name = "Space Topic"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Name each Space after the work happening inside it: the live topic of its primary agent pane."
+platforms = ["macos", "linux", "windows"]
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+
+# herdr plugin action invoke phorsmalahti.space-topic.sync
+[[actions]]
+id = "sync"
+title = "Sync space topics"
+description = "Rename every managed space to its primary agent's live topic"
+contexts = ["global", "workspace", "tab", "pane"]
+command = ["node", "sync-space-labels.js"]
+
+# Same walk, nothing written. Output lands in `herdr plugin log list`.
+[[actions]]
+id = "preview"
+title = "Preview space topics"
+description = "Show what sync would rename, without touching anything"
+contexts = ["global", "workspace", "tab", "pane"]
+command = ["node", "sync-space-labels.js", "--dry-run"]
+
+# Put every space back to the label it had before this plugin first saw it.
+[[actions]]
+id = "restore"
+title = "Restore original space labels"
+description = "Undo every rename this plugin made and forget its state"
+contexts = ["global", "workspace", "tab", "pane"]
+command = ["node", "sync-space-labels.js", "--restore"]
+
+# Hand a hand-renamed space back to the plugin.
+[[actions]]
+id = "adopt"
+title = "Adopt this space"
+description = "Resume auto-naming a space you renamed by hand"
+contexts = ["workspace", "tab", "pane"]
+command = ["node", "sync-space-labels.js", "--adopt"]
+
+# ---------------------------------------------------------------------------
+# Events
+#
+# Anything that can change which pane leads a space, or what that pane is
+# working on. Deliberately NOT subscribing to workspace.renamed: our own
+# renames emit it, and we would re-trigger ourselves forever.
+# ---------------------------------------------------------------------------
+
+[[events]]
+on = "workspace.focused"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "workspace.created"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "worktree.created"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "tab.focused"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "tab.created"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "tab.closed"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "pane.focused"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "pane.created"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "pane.closed"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "pane.moved"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "pane.exited"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "worktree.opened"
+command = ["node", "sync-space-labels.js"]
+
+[[events]]
+on = "tab.moved"
+command = ["node", "sync-space-labels.js"]
+
+# The one that carries the topic itself: an agent flipping idle<->working is
+# when it names the task it just started. herdr 0.9 has no plugin hook for a
+# bare terminal-title change -- `pane.updated` exists as a socket subscription
+# but is rejected as a hook name -- so this is the signal.
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "sync-space-labels.js"]
