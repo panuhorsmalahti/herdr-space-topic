@@ -385,8 +385,9 @@ function savePrEntry(key, entry) {
 }
 
 // The {ci} mark for each verdict. Emoji, because a Space label is plain text
-// and these carry their own colour. Pending and no-checks get no mark.
-const CI_MARKS = { pass: "✅", fail: "❌" };
+// and these carry their own colour. A PR with no checks gets no mark. Not ⏳
+// for pending: STATUS_GLYPHS would strip it from the head of the label.
+const CI_MARKS = { pass: "✅", fail: "❌", pending: "🟡" };
 
 // Conclusions and commit-status states that mean a check did not pass.
 const CI_FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);

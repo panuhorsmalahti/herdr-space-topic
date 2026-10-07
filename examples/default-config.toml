@@ -58,8 +58,8 @@ format = "{topic}"
 # CLI on PATH and logged in. Takes every `format` token plus:
 #   {pr}        the PR number
 #   {pr_title}  the PR title
-#   {ci}        ✅ when every check passed, ❌ when one failed, nothing while
-#               checks are running or when the PR has none
+#   {ci}        ✅ when every check passed, ❌ when one failed, 🟡 while
+#               checks are still running, nothing when the PR has none
 # Re-checked when you switch to the Space, every ~30 minutes once checks have
 # settled, and every ~2 minutes while they run or before a PR exists.
 # Set to "" to turn PR lookups off entirely.

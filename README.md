@@ -75,7 +75,8 @@ mark for its CI:
 ```text
 ✅ PR#232: feat(voice): run voice chat a…    every check passed
 ❌ PR#255: feat(prism-client): publish t…    a check failed
-PR#260: feat(webhooks): add a classifie…     checks still running, or none
+🟡 PR#269: test(e2e): answer repeated m…    checks still running
+PR#271: docs: fix a typo in the READM…       no checks at all
 ```
 
 A single failed check is enough for ❌, even while others are still running,
@@ -108,8 +109,8 @@ Other agents are looked up in herdr's directory for the pane; Spaces sharing
 one checkout there share its branch, and therefore its PR name.
 
 Change the shape with `pr_format`, which takes every `format` token plus `{pr}`,
-`{pr_title}` and `{ci}` (the mark, or nothing); set it to `""` to turn PR
-lookups off:
+`{pr_title}` and `{ci}` (the mark, or nothing when the PR has no checks); set
+it to `""` to turn PR lookups off:
 
 ```toml
 pr_format = "{ci} PR#{pr}: {pr_title}"   # default
