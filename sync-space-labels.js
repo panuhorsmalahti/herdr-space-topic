@@ -70,7 +70,7 @@ const DEFAULTS = {
   format: "{topic}",
   // Used instead of `format` when the lead pane's branch has an open pull
   // request. Takes the same tokens plus {pr}, {pr_title} and {ci} (a mark for
-  // the PR's checks). "" turns PR lookups off.
+  // the PR's checks, or for merge conflicts). "" turns PR lookups off.
   pr_format: "{ci} PR#{pr}: {pr_title}",
   max_label_length: 40,
   // Once you rename a Space by hand, it is yours -- we stop writing to it.
@@ -194,15 +194,29 @@ function applyFormat(fmt, tokens) {
 // The checkout `cwd` is in: its root, and its branch ("" when detached or not
 // a repo). The root keys the PR cache, so panes in subdirectories of one
 // worktree share a lookup.
+//
+// HEAD is detached for the length of a rebase -- which is exactly when an
+// agent is fixing a PR's merge conflicts -- but git still records the branch
+// being rebased, so we report that one, flagged `rebasing`.
 function gitHead(cwd) {
-  if (!cwd) return { root: "", branch: "" };
-  const r = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"], {
+  const none = { root: "", branch: "", rebasing: false };
+  if (!cwd) return none;
+  const r = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--abbrev-ref", "HEAD"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
-  if (r.status !== 0) return { root: "", branch: "" };
-  const [root = "", b = ""] = (r.stdout || "").trim().split(/\r?\n/);
-  return { root, branch: b === "HEAD" ? "" : b };
+  if (r.status !== 0) return none;
+  const [root = "", gitDir = "", b = ""] = (r.stdout || "").trim().split(/\r?\n/);
+  if (b !== "HEAD") return { root, branch: b, rebasing: false };
+  for (const f of ["rebase-merge/head-name", "rebase-apply/head-name"]) {
+    try {
+      const ref = readFileSync(join(gitDir, f), "utf8").trim();
+      if (ref.startsWith("refs/heads/")) return { root, branch: ref.slice("refs/heads/".length), rebasing: true };
+    } catch {
+      // Not this kind of rebase, or none at all.
+    }
+  }
+  return { ...none, root };
 }
 
 // Where a Claude Code agent is really working. Claude Code moves a session
@@ -344,9 +358,10 @@ function saveState(next, liveIds) {
 // claim reuses the old answer and moves on instead of asking again.
 //
 // How long an answer lasts depends on what it was. A branch with no PR yet,
-// or a PR whose checks are still running, is about to change, so it is asked
-// again after PR_TTL_MS. A PR whose checks have settled is asked again after
-// PR_SETTLED_TTL_MS, or as soon as you switch to its Space.
+// a PR whose checks are still running, or one GitHub has not finished
+// checking for conflicts is about to change, so it is asked again after
+// PR_TTL_MS. A settled PR is asked again after PR_SETTLED_TTL_MS, or as soon
+// as you switch to its Space.
 // ---------------------------------------------------------------------------
 
 const PR_TTL_MS = 2 * 60 * 1000;
@@ -388,6 +403,14 @@ function savePrEntry(key, entry) {
 // and these carry their own colour. A PR with no checks gets no mark. Not ⏳
 // for pending: STATUS_GLYPHS would strip it from the head of the label.
 const CI_MARKS = { pass: "✅", fail: "❌", pending: "🟡" };
+// Shown instead of the CI mark when the PR has merge conflicts: it cannot be
+// merged whatever its checks say, so that is the thing to know.
+const CONFLICT_MARK = "🔀";
+
+function ciMark(pr) {
+  if (!pr) return "";
+  return pr.mergeable === "CONFLICTING" ? CONFLICT_MARK : CI_MARKS[pr.ci] || "";
+}
 
 // Conclusions and commit-status states that mean a check did not pass.
 const CI_FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
@@ -411,13 +434,15 @@ function ciState(checks) {
 // The open PR for the branch checked out at `root`. `gh pr view` with no
 // argument finds the branch's PR the way gh always does -- tracking remote,
 // forks included -- but also returns merged and closed ones, so anything not
-// OPEN counts as none.
+// OPEN counts as none. Mid-rebase gh cannot tell which branch that is, so
+// then we name it (`branch`), at the cost of matching it by name alone.
 //
 // Returns null for "no open PR" and undefined for "could not tell" (no gh, not
 // logged in, offline), so a network blip keeps the last answer instead of
 // flipping the Space back to its topic.
-function fetchPr(root) {
-  const r = spawnSync("gh", ["pr", "view", "--json", "number,title,state,statusCheckRollup"], {
+function fetchPr(root, branch) {
+  const args = ["pr", "view", ...(branch ? [branch] : []), "--json", "number,title,state,mergeable,statusCheckRollup"];
+  const r = spawnSync("gh", args, {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -429,7 +454,14 @@ function fetchPr(root) {
   try {
     const pr = JSON.parse(r.stdout);
     if (pr.state !== "OPEN") return null;
-    return { number: pr.number, title: normalize(pr.title), ci: ciState(pr.statusCheckRollup) };
+    // mergeable: MERGEABLE, CONFLICTING, or UNKNOWN while GitHub works it out
+    // in the background (after a push, or after the base branch moves).
+    return {
+      number: pr.number,
+      title: normalize(pr.title),
+      ci: ciState(pr.statusCheckRollup),
+      mergeable: pr.mergeable || "UNKNOWN",
+    };
   } catch {
     return undefined;
   }
@@ -444,12 +476,14 @@ function prFor(head, refresh) {
   // A claim on a branch never looked up before has no answer to lend (no `pr`
   // key at all), so that one we look up ourselves rather than guess "no PR".
   const age = hit ? Date.now() - hit.at : Infinity;
-  const settled = hit?.pr && hit.pr.ci !== "pending";
+  // An entry cached before `mergeable` was looked up has it missing, and so
+  // counts as unsettled too: it is refreshed rather than trusted for 30 min.
+  const settled = hit?.pr && hit.pr.ci !== "pending" && hit.pr.mergeable && hit.pr.mergeable !== "UNKNOWN";
   const ttl = refresh ? PR_FOCUS_MIN_AGE_MS : settled ? PR_SETTLED_TTL_MS : PR_TTL_MS;
   if (hit && "pr" in hit && age < ttl) return hit.pr;
   const previous = hit?.pr;
   savePrEntry(key, { at: Date.now(), pr: previous });
-  const fetched = fetchPr(head.root);
+  const fetched = fetchPr(head.root, head.rebasing ? head.branch : "");
   const pr = fetched === undefined ? previous ?? null : fetched;
   savePrEntry(key, { at: Date.now(), pr });
   return pr;
@@ -549,7 +583,7 @@ function plan(cfg, session, state) {
         applyFormat(pr ? cfg.pr_format : cfg.format, {
           pr: pr ? pr.number : "",
           pr_title: pr ? pr.title : "",
-          ci: pr ? CI_MARKS[pr.ci] || "" : "",
+          ci: ciMark(pr),
           topic: body,
           agent: pane.agent || "",
           original: rec.original,

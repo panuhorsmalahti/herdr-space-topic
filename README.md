@@ -74,14 +74,21 @@ mark for its CI:
 
 ```text
 ✅ PR#232: feat(voice): run voice chat a…    every check passed
-❌ PR#255: feat(prism-client): publish t…    a check failed
+❌ PR#238: fix(bedrock): send Converse m…    a check failed
 🟡 PR#269: test(e2e): answer repeated m…    checks still running
+🔀 PR#255: feat(prism-client): publish…     merge conflicts, whatever CI says
 PR#271: docs: fix a typo in the READM…       no checks at all
 ```
 
 A single failed check is enough for ❌, even while others are still running,
-since waiting will not turn it green. The marks are emoji because a Space label
-is plain text and these carry their own colour.
+since waiting will not turn it green. A PR with merge conflicts shows 🔀
+instead of its CI mark: it cannot be merged either way, so that is the thing to
+know. The marks are emoji because a Space label is plain text and these carry
+their own colour.
+
+The PR keeps its name while an agent rebases it to fix those conflicts: HEAD is
+detached for the length of a rebase, so the plugin reads the branch being
+rebased from git instead.
 
 The lookup is `gh pr view` in that checkout, so it finds the PR the same way
 `gh` does from your shell, forks included. Draft PRs count; merged and closed
@@ -109,8 +116,8 @@ Other agents are looked up in herdr's directory for the pane; Spaces sharing
 one checkout there share its branch, and therefore its PR name.
 
 Change the shape with `pr_format`, which takes every `format` token plus `{pr}`,
-`{pr_title}` and `{ci}` (the mark, or nothing when the PR has no checks); set
-it to `""` to turn PR lookups off:
+`{pr_title}` and `{ci}` (the mark, or nothing when the PR has no checks and no
+conflicts); set it to `""` to turn PR lookups off:
 
 ```toml
 pr_format = "{ci} PR#{pr}: {pr_title}"   # default
