@@ -1,8 +1,8 @@
 id = "phorsmalahti.space-topic"
 name = "Space Topic"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.9.0"
-description = "Name each Space after the work happening inside it: the live topic of its primary agent pane."
+description = "Name each Space after the work happening inside it: its open pull request, or the live topic of its primary agent pane."
 platforms = ["macos", "linux", "windows"]
 
 # ---------------------------------------------------------------------------

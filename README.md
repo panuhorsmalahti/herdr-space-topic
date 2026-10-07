@@ -27,7 +27,9 @@ herdr plugin install panuhorsmalahti/herdr-space-topic
 ```
 
 Requires herdr >= 0.9.0 and `node` >= 18 on your `PATH`. No npm dependencies,
-no build step, no API key — the topic is already on the server.
+no build step, no API key — the topic is already on the server. Naming Spaces
+after pull requests also needs the GitHub CLI, [`gh`](https://cli.github.com),
+logged in; without it the plugin just sticks to topics.
 
 Look before you leap. `preview` walks the session and prints what it *would*
 rename, writing nothing:
@@ -63,6 +65,35 @@ CLI, and needs no plugin context. `restore` undoes the lot either way.
 When there is no topic yet — agent still starting, plain shell, agent exited —
 `fallback` decides: the original label, the Git branch, the directory basename,
 or leave the sidebar alone.
+
+## Spaces with a pull request
+
+If the branch checked out in the lead pane's directory has an **open** pull
+request on GitHub, the Space is named after the PR instead of the topic:
+
+```text
+PR#265: feat(webhooks): answer the HEAD…
+```
+
+The lookup is `gh pr view` in that checkout, so it finds the PR the same way
+`gh` does from your shell, forks included. Draft PRs count; merged and closed
+ones do not, so a Space goes back to its topic once its PR is merged.
+
+Answers are cached for two minutes per checkout and branch, so a PR you just
+opened shows up on the first event after that. Spaces sharing one checkout
+share its branch, and therefore its PR name. If `gh` is missing, logged out or
+offline, a Space keeps whatever the last successful lookup said.
+
+Change the shape with `pr_format`, which takes every `format` token plus `{pr}`
+and `{pr_title}`; set it to `""` to turn PR lookups off:
+
+```toml
+pr_format = "PR#{pr}: {pr_title}"   # default
+pr_format = "#{pr} {topic}"         # #265 Fix flaky auth test
+pr_format = ""                      # topics only, never call gh
+```
+
+PR titles run long, so consider raising `max_label_length` alongside.
 
 ## Your own names win
 
@@ -112,6 +143,7 @@ cp examples/default-config.toml "$(herdr plugin config-dir phorsmalahti.space-to
 | `source` | `"first"` | which pane speaks for the Space: `first` or `active` |
 | `fallback` | `"original"` | with no topic: `original`, `branch`, `cwd`, `keep` |
 | `format` | `"{topic}"` | `{topic} {agent} {original} {branch} {cwd} {number} {status}` |
+| `pr_format` | `"PR#{pr}: {pr_title}"` | used instead of `format` when the branch has an open PR; adds `{pr} {pr_title}`; `""` turns it off |
 | `max_label_length` | `40` | truncate after formatting (clamped 8–80) |
 | `respect_manual_names` | `true` | never overwrite a Space you renamed |
 | `require_agent` | `true` | only manage Spaces that host an agent |
@@ -153,8 +185,10 @@ actually changes.
 - **State** lives in `HERDR_PLUGIN_STATE_DIR`. Delete it and the plugin treats
   the labels currently on screen as the originals — `restore` then puts those
   back rather than the directory names.
-- **Git.** `branchOf` only shells out to `git` when `fallback = "branch"` or
-  your `format` contains `{branch}`.
+- **Git and GitHub.** `git` only runs when something needs the branch:
+  `pr_format`, `fallback = "branch"`, or `{branch}` in a format. `gh` only runs
+  when `pr_format` is set, at most once per checkout and branch every two
+  minutes; the cache sits next to the state as `space-topic-prs.json`.
 - **Verified** against herdr 0.9.0 on macOS with Claude Code and Codex panes.
   `min_herdr_version` is `0.9.0` because that is what it has been run against,
   not because older versions are known to break.

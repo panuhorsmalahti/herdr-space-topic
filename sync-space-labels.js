@@ -7,7 +7,8 @@
 // it is doing. Agents already publish what they are working on: Claude Code,
 // Codex and friends set the terminal title, and herdr exposes it per pane as
 // `terminal_title_stripped`. This walks the session, picks the pane that leads
-// each Space, and writes that pane's topic onto the Space.
+// each Space, and writes that pane's topic onto the Space. When the branch it
+// has checked out has an open pull request, the Space is named after the PR.
 //
 // Nothing here is a daemon: herdr runs this script on the events declared in
 // herdr-plugin.toml, it does its walk, and exits.
@@ -17,7 +18,8 @@
 //   node sync-space-labels.js --restore    put the original labels back
 //   node sync-space-labels.js --adopt      re-manage the space you are in
 //
-// Requires: node >= 18, herdr >= 0.9.0. No npm dependencies.
+// Requires: node >= 18, herdr >= 0.9.0. No npm dependencies. PR names need the
+// GitHub CLI (`gh`), logged in; without it Spaces simply keep their topics.
 
 "use strict";
 
@@ -30,6 +32,7 @@ const SOURCE_ID = "plugin.space-topic"; // our reporter identity for workspace t
 const CONFIG_DIR = process.env.HERDR_PLUGIN_CONFIG_DIR || ".";
 const STATE_DIR = process.env.HERDR_PLUGIN_STATE_DIR || ".";
 const STATE_PATH = join(STATE_DIR, "space-topic-state.json");
+const PR_CACHE_PATH = join(STATE_DIR, "space-topic-prs.json");
 
 const argv = process.argv.slice(2);
 const DRY_RUN = argv.includes("--dry-run");
@@ -60,6 +63,10 @@ const DEFAULTS = {
   fallback: "original",
   // Tokens: {topic} {agent} {original} {branch} {cwd} {number} {status}
   format: "{topic}",
+  // Used instead of `format` when the lead pane's branch has an open pull
+  // request. Takes the same tokens plus {pr} and {pr_title}. "" turns PR
+  // lookups off.
+  pr_format: "PR#{pr}: {pr_title}",
   max_label_length: 40,
   // Once you rename a Space by hand, it is yours -- we stop writing to it.
   respect_manual_names: true,
@@ -69,10 +76,27 @@ const DEFAULTS = {
   skip: [],
 };
 
+// Drop a trailing `# comment`, but not a `#` inside a quoted value:
+// `pr_format = "PR #{pr}"` is a format, not a comment.
+function stripComment(line) {
+  let quote = "";
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === quote) quote = "";
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "#") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
 function parseToml(text) {
   const out = {};
   for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/(^|\s)#.*$/, "").trim();
+    const line = stripComment(raw).trim();
     if (!line || line.startsWith("[")) continue;
     const eq = line.indexOf("=");
     if (eq < 0) continue;
@@ -106,6 +130,7 @@ function loadConfig() {
   if (!["first", "active"].includes(cfg.source)) cfg.source = DEFAULTS.source;
   if (!["original", "branch", "cwd", "keep"].includes(cfg.fallback)) cfg.fallback = DEFAULTS.fallback;
   if (!Array.isArray(cfg.skip)) cfg.skip = [];
+  if (typeof cfg.pr_format !== "string") cfg.pr_format = "";
   cfg.max_label_length = Math.max(8, Math.min(80, Number(cfg.max_label_length) || DEFAULTS.max_label_length));
   return cfg;
 }
@@ -161,15 +186,18 @@ function applyFormat(fmt, tokens) {
   return String(fmt).replace(/\{(\w+)\}/g, (m, k) => (k in tokens ? String(tokens[k] ?? "") : m));
 }
 
-function branchOf(cwd) {
-  if (!cwd) return "";
-  const r = spawnSync("git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], {
+// The checkout `cwd` is in: its root, and its branch ("" when detached or not
+// a repo). The root keys the PR cache, so panes in subdirectories of one
+// worktree share a lookup.
+function gitHead(cwd) {
+  if (!cwd) return { root: "", branch: "" };
+  const r = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
-  if (r.status !== 0) return "";
-  const b = (r.stdout || "").trim();
-  return b === "HEAD" ? "" : b;
+  if (r.status !== 0) return { root: "", branch: "" };
+  const [root = "", b = ""] = (r.stdout || "").trim().split(/\r?\n/);
+  return { root, branch: b === "HEAD" ? "" : b };
 }
 
 function baseName(p) {
@@ -245,6 +273,91 @@ function saveState(next, liveIds) {
 }
 
 // ---------------------------------------------------------------------------
+// Pull requests
+//
+// A lookup is a GitHub round trip (most of a second), and this script runs on
+// nearly every focus change, often as several copies at once. So answers are
+// cached per checkout and branch for PR_TTL_MS -- Spaces sharing a checkout
+// share one lookup -- and a run claims a stale entry, stamping it fresh while
+// keeping the old answer, before it asks GitHub. A concurrent run that finds
+// the claim reuses the old answer and moves on instead of asking again.
+// ---------------------------------------------------------------------------
+
+const PR_TTL_MS = 2 * 60 * 1000;
+const PR_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function loadPrCache() {
+  try {
+    const c = JSON.parse(readFileSync(PR_CACHE_PATH, "utf8"));
+    return c && typeof c === "object" && !Array.isArray(c) ? c : {};
+  } catch {
+    return {};
+  }
+}
+
+// Read-merge-write a single entry, so a concurrent run's other entries survive.
+function savePrEntry(key, entry) {
+  if (DRY_RUN) return; // a preview writes nothing, the cache included
+  const cache = loadPrCache();
+  if ((cache[key]?.at ?? 0) > entry.at) return;
+  cache[key] = entry;
+  for (const [k, e] of Object.entries(cache)) {
+    if (!e || entry.at - (e.at ?? 0) > PR_CACHE_MAX_AGE_MS) delete cache[k];
+  }
+  try {
+    mkdirSync(STATE_DIR, { recursive: true });
+    const tmp = `${PR_CACHE_PATH}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(cache, null, 2));
+    renameSync(tmp, PR_CACHE_PATH);
+  } catch (err) {
+    process.stderr.write(`space-topic: cannot write PR cache: ${err.message}\n`);
+  }
+}
+
+// The open PR for the branch checked out at `root`. `gh pr view` with no
+// argument finds the branch's PR the way gh always does -- tracking remote,
+// forks included -- but also returns merged and closed ones, so anything not
+// OPEN counts as none.
+//
+// Returns null for "no open PR" and undefined for "could not tell" (no gh, not
+// logged in, offline), so a network blip keeps the last answer instead of
+// flipping the Space back to its topic.
+function fetchPr(root) {
+  const r = spawnSync("gh", ["pr", "view", "--json", "number,title,state"], {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 10000,
+    env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" },
+  });
+  if (r.error) return undefined;
+  if (r.status !== 0) return /no pull requests found/i.test(r.stderr || "") ? null : undefined;
+  try {
+    const pr = JSON.parse(r.stdout);
+    return pr.state === "OPEN" ? { number: pr.number, title: normalize(pr.title) } : null;
+  } catch {
+    return undefined;
+  }
+}
+
+function prFor(head) {
+  if (!head.root || !head.branch) return null;
+  const key = `${head.root}::${head.branch}`;
+  // Fresh from disk, not a copy read at startup: a concurrent run may have
+  // claimed this entry a moment ago.
+  const hit = loadPrCache()[key];
+  // A claim on a branch never looked up before has no answer to lend (no `pr`
+  // key at all), so that one we look up ourselves rather than guess "no PR".
+  if (hit && "pr" in hit && Date.now() - hit.at < PR_TTL_MS) return hit.pr;
+  const previous = hit?.pr;
+  savePrEntry(key, { at: Date.now(), pr: previous });
+  const fetched = fetchPr(head.root);
+  const pr = fetched === undefined ? previous ?? null : fetched;
+  savePrEntry(key, { at: Date.now(), pr });
+  return pr;
+}
+
+// ---------------------------------------------------------------------------
 // Session walk
 // ---------------------------------------------------------------------------
 
@@ -312,13 +425,18 @@ function plan(cfg, session, state) {
 
     const topic = normalize(pane.terminal_title_stripped);
     const cwd = pane.foreground_cwd || pane.cwd || "";
-    // Only shell out to git when something actually asks for the branch.
-    const wantsBranch = cfg.fallback === "branch" || String(cfg.format).includes("{branch}");
-    const branch = wantsBranch ? branchOf(cwd) : "";
+    // Only shell out to git (and gh) when something actually asks for it.
+    const wantsPr = Boolean(cfg.pr_format);
+    const wantsBranch =
+      wantsPr || cfg.fallback === "branch" || /\{branch\}/.test(String(cfg.format) + cfg.pr_format);
+    const head = wantsBranch ? gitHead(cwd) : { root: "", branch: "" };
+    const branch = head.branch;
+    const pr = wantsPr ? prFor(head) : null;
 
     let body = topic;
     if (!body) {
-      if (cfg.fallback === "keep") {
+      // An open PR is a name in its own right; it does not wait for a topic.
+      if (cfg.fallback === "keep" && !pr) {
         items.push({ ws, rec, skip: "no topic yet" });
         continue;
       }
@@ -329,7 +447,9 @@ function plan(cfg, session, state) {
 
     const label = cap(
       normalize(
-        applyFormat(cfg.format, {
+        applyFormat(pr ? cfg.pr_format : cfg.format, {
+          pr: pr ? pr.number : "",
+          pr_title: pr ? pr.title : "",
           topic: body,
           agent: pane.agent || "",
           original: rec.original,
