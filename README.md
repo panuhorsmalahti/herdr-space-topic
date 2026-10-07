@@ -6,7 +6,7 @@ herdr labels a Space from its directory, so several worktrees of one repo all
 read the same name in the sidebar and you have to open each one to remember
 what it is doing.
 
-![Six spaces that all read api-server become six distinct task names](docs/sidebar.svg)
+![Six spaces that all read api-server become six distinct names, two of them from open pull requests](docs/sidebar.svg)
 
 <sub>Illustration — labels are examples, not a capture of a real session.</sub>
 

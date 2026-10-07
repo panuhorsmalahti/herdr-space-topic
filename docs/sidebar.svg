@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="920" height="392" viewBox="0 0 920 392" role="img" aria-label="herdr sidebar before and after: five spaces all labelled api-server become five distinct task names">
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="392" viewBox="0 0 920 392" role="img" aria-label="herdr sidebar before and after: six spaces all labelled api-server become six distinct names, two of them named after their open pull requests">
   <title>herdr Spaces sidebar, before and after Space Topic</title>
-  <desc>Before: five spaces in one repo all read the same directory name. After: each space reads the live topic of the agent working inside it.</desc>
+  <desc>Before: six spaces in one repo all read the same directory name. After: each space reads the live topic of the agent working inside it, or its open pull request when its branch has one.</desc>
 
   <defs>
     <style>
@@ -12,6 +12,7 @@
       .num { fill: #6e7681; font-size: 13px; }
       .dim { fill: #7d8590; font-size: 13.5px; }
       .lit { fill: #e6edf3; font-size: 13.5px; }
+      .pr { font-weight: 600; }
       .foot { fill: #6e7681; font-size: 12px; }
       .row-active { fill: #1f6feb; fill-opacity: .12; }
     </style>
@@ -58,13 +59,13 @@
   <rect x="531" y="199" width="348" height="28" class="row-active"/>
 
   <g class="mono">
-    <text x="550" y="118" class="num">1</text><text x="574" y="118" class="lit">Fix flaky auth test</text>
+    <text x="550" y="118" class="num">1</text><text x="574" y="118" class="lit"><tspan class="pr">PR#271:</tspan> Fix flaky auth test</text>
     <circle cx="856" cy="113.5" r="4" fill="#3fb950"/>
 
     <text x="550" y="152" class="num">2</text><text x="574" y="152" class="lit">Draft release notes</text>
     <circle cx="856" cy="147.5" r="4" fill="#58a6ff"/>
 
-    <text x="550" y="186" class="num">3</text><text x="574" y="186" class="lit">Bump k8s client</text>
+    <text x="550" y="186" class="num">3</text><text x="574" y="186" class="lit"><tspan class="pr">PR#268:</tspan> Bump k8s client</text>
     <circle cx="856" cy="181.5" r="4" fill="#d29922"/>
 
     <text x="550" y="220" class="num">4</text><text x="574" y="220" class="lit">Repro issue #482</text>
@@ -79,5 +80,5 @@
 
   <!-- ================= footer ================= -->
   <text x="40" y="346" class="mono foot">Six worktrees of one repo. herdr names a Space after its directory; Space Topic names it after</text>
-  <text x="40" y="366" class="mono foot">the live topic of the agent working inside it.</text>
+  <text x="40" y="366" class="mono foot">the live topic of the agent working inside it, or its open pull request when the branch has one.</text>
 </svg>
