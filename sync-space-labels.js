@@ -24,7 +24,9 @@
 "use strict";
 
 const { spawnSync } = require("node:child_process");
-const { readFileSync, writeFileSync, renameSync, rmSync, mkdirSync } = require("node:fs");
+const fs = require("node:fs");
+const { readFileSync, writeFileSync, renameSync, rmSync, mkdirSync } = fs;
+const { homedir } = require("node:os");
 const { join } = require("node:path");
 
 const HERDR = process.env.HERDR_BIN_PATH || "herdr";
@@ -32,6 +34,7 @@ const SOURCE_ID = "plugin.space-topic"; // our reporter identity for workspace t
 const CONFIG_DIR = process.env.HERDR_PLUGIN_CONFIG_DIR || ".";
 const STATE_DIR = process.env.HERDR_PLUGIN_STATE_DIR || ".";
 const STATE_PATH = join(STATE_DIR, "space-topic-state.json");
+const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 const PR_CACHE_PATH = join(STATE_DIR, "space-topic-prs.json");
 
 const argv = process.argv.slice(2);
@@ -200,6 +203,62 @@ function gitHead(cwd) {
   if (r.status !== 0) return { root: "", branch: "" };
   const [root = "", b = ""] = (r.stdout || "").trim().split(/\r?\n/);
   return { root, branch: b === "HEAD" ? "" : b };
+}
+
+// Where a Claude Code agent is really working. Claude Code moves a session
+// into a worktree (`claude --worktree`, or its EnterWorktree tool) without
+// changing its process's directory, so herdr keeps reporting the directory it
+// was launched from -- usually the main checkout, on main, which has no PR.
+// The session transcript records the truth: every entry carries the
+// session's cwd. herdr hands us the session id; the newest entry with a cwd
+// wins. "" when that cannot be read, and the caller falls back to herdr's.
+const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
+
+function claudeCwd(pane) {
+  const id = pane.agent === "claude" ? pane.agent_session?.value : "";
+  if (!id || !/^[\w-]+$/.test(id)) return "";
+  const projects = join(CLAUDE_DIR, "projects");
+  let file = "";
+  try {
+    // Transcripts are filed under the directory the session is in, which is
+    // exactly what we do not know yet -- so look the id up across all of them.
+    for (const dir of fs.readdirSync(projects)) {
+      const f = join(projects, dir, `${id}.jsonl`);
+      if (fs.existsSync(f)) {
+        file = f;
+        break;
+      }
+    }
+  } catch {
+    return "";
+  }
+  if (!file) return "";
+
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, TRANSCRIPT_TAIL_BYTES);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    const lines = buf.toString("utf8").split("\n");
+    if (len < size) lines.shift(); // we started mid-line
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('"cwd"')) continue;
+      try {
+        const cwd = JSON.parse(lines[i]).cwd;
+        // A worktree removed since is no place to look for a branch.
+        if (typeof cwd === "string" && cwd && fs.existsSync(cwd)) return cwd;
+      } catch {
+        // A line still being written; try the one before.
+      }
+    }
+  } catch {
+    // Unreadable transcript: fall back to herdr's view.
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  return "";
 }
 
 function baseName(p) {
@@ -462,7 +521,7 @@ function plan(cfg, session, state) {
     }
 
     const topic = normalize(pane.terminal_title_stripped);
-    const cwd = pane.foreground_cwd || pane.cwd || "";
+    const cwd = claudeCwd(pane) || pane.foreground_cwd || pane.cwd || "";
     // Only shell out to git (and gh) when something actually asks for it.
     const wantsPr = Boolean(cfg.pr_format);
     const wantsBranch =

@@ -95,9 +95,17 @@ A PR and its checks come from the same lookup, which is refreshed:
 
 herdr has no timers for plugins, so "every" means on the next herdr event after
 that much time has passed. Any agent changing state or any focus change counts,
-so while agents are running it is rarely late by much. Spaces sharing one checkout share
-its branch, and therefore its PR name. If `gh` is missing, logged out or
-offline, a Space keeps whatever the last successful lookup said.
+so while agents are running it is rarely late by much. If `gh` is missing,
+logged out or offline, a Space keeps whatever the last successful lookup said.
+
+**Claude Code worktrees are followed.** A Claude Code session moved into a
+worktree (`claude --worktree`, or its EnterWorktree tool) keeps its process in
+the directory it was launched from, so herdr reports the main checkout, which
+is usually on `main` with no PR. For Claude panes the plugin reads where the
+session really is from its transcript under `~/.claude/projects` (or
+`$CLAUDE_CONFIG_DIR`), so each worktree Space finds its own branch and PR.
+Other agents are looked up in herdr's directory for the pane; Spaces sharing
+one checkout there share its branch, and therefore its PR name.
 
 Change the shape with `pr_format`, which takes every `format` token plus `{pr}`,
 `{pr_title}` and `{ci}` (the mark, or nothing); set it to `""` to turn PR
