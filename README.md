@@ -69,28 +69,45 @@ or leave the sidebar alone.
 ## Spaces with a pull request
 
 If the branch checked out in the lead pane's directory has an **open** pull
-request on GitHub, the Space is named after the PR instead of the topic:
+request on GitHub, the Space is named after the PR instead of the topic, with a
+mark for its CI:
 
 ```text
-PR#265: feat(webhooks): answer the HEAD…
+✅ PR#232: feat(voice): run voice chat a…    every check passed
+❌ PR#255: feat(prism-client): publish t…    a check failed
+PR#260: feat(webhooks): add a classifie…     checks still running, or none
 ```
+
+A single failed check is enough for ❌, even while others are still running,
+since waiting will not turn it green. The marks are emoji because a Space label
+is plain text and these carry their own colour.
 
 The lookup is `gh pr view` in that checkout, so it finds the PR the same way
 `gh` does from your shell, forks included. Draft PRs count; merged and closed
 ones do not, so a Space goes back to its topic once its PR is merged.
 
-Answers are cached for two minutes per checkout and branch, so a PR you just
-opened shows up on the first event after that. Spaces sharing one checkout
-share its branch, and therefore its PR name. If `gh` is missing, logged out or
+A PR and its checks come from the same lookup, which is refreshed:
+
+- **when you switch to the Space**, straight away;
+- **every 30 minutes or so** once its checks have settled on ✅ or ❌;
+- **every 2 minutes** while checks are still running, or while the branch has
+  no PR yet, so a result or a newly opened PR shows up quickly.
+
+herdr has no timers for plugins, so "every" means on the next herdr event after
+that much time has passed. Any agent changing state or any focus change counts,
+so while agents are running it is rarely late by much. Spaces sharing one checkout share
+its branch, and therefore its PR name. If `gh` is missing, logged out or
 offline, a Space keeps whatever the last successful lookup said.
 
-Change the shape with `pr_format`, which takes every `format` token plus `{pr}`
-and `{pr_title}`; set it to `""` to turn PR lookups off:
+Change the shape with `pr_format`, which takes every `format` token plus `{pr}`,
+`{pr_title}` and `{ci}` (the mark, or nothing); set it to `""` to turn PR
+lookups off:
 
 ```toml
-pr_format = "PR#{pr}: {pr_title}"   # default
-pr_format = "#{pr} {topic}"         # #265 Fix flaky auth test
-pr_format = ""                      # topics only, never call gh
+pr_format = "{ci} PR#{pr}: {pr_title}"   # default
+pr_format = "PR#{pr}: {pr_title}"        # no CI mark
+pr_format = "#{pr} {ci} {topic}"         # #265 ✅ Fix flaky auth test
+pr_format = ""                           # topics only, never call gh
 ```
 
 PR titles run long, so consider raising `max_label_length` alongside.
@@ -143,7 +160,7 @@ cp examples/default-config.toml "$(herdr plugin config-dir phorsmalahti.space-to
 | `source` | `"first"` | which pane speaks for the Space: `first` or `active` |
 | `fallback` | `"original"` | with no topic: `original`, `branch`, `cwd`, `keep` |
 | `format` | `"{topic}"` | `{topic} {agent} {original} {branch} {cwd} {number} {status}` |
-| `pr_format` | `"PR#{pr}: {pr_title}"` | used instead of `format` when the branch has an open PR; adds `{pr} {pr_title}`; `""` turns it off |
+| `pr_format` | `"{ci} PR#{pr}: {pr_title}"` | used instead of `format` when the branch has an open PR; adds `{pr} {pr_title} {ci}`; `""` turns it off |
 | `max_label_length` | `40` | truncate after formatting (clamped 8–80) |
 | `respect_manual_names` | `true` | never overwrite a Space you renamed |
 | `require_agent` | `true` | only manage Spaces that host an agent |
@@ -187,8 +204,8 @@ actually changes.
   back rather than the directory names.
 - **Git and GitHub.** `git` only runs when something needs the branch:
   `pr_format`, `fallback = "branch"`, or `{branch}` in a format. `gh` only runs
-  when `pr_format` is set, at most once per checkout and branch every two
-  minutes; the cache sits next to the state as `space-topic-prs.json`.
+  when `pr_format` is set, at most once per checkout and branch per refresh
+  (see above); the cache sits next to the state as `space-topic-prs.json`.
 - **Verified** against herdr 0.9.0 on macOS with Claude Code and Codex panes.
   `min_herdr_version` is `0.9.0` because that is what it has been run against,
   not because older versions are known to break.

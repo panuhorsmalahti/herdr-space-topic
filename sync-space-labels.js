@@ -38,6 +38,8 @@ const argv = process.argv.slice(2);
 const DRY_RUN = argv.includes("--dry-run");
 const RESTORE = argv.includes("--restore");
 const ADOPT = argv.includes("--adopt");
+// Switching to a Space re-checks its pull request and CI on the spot.
+const FOCUS_EVENT = process.env.HERDR_PLUGIN_EVENT === "workspace.focused";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -64,9 +66,9 @@ const DEFAULTS = {
   // Tokens: {topic} {agent} {original} {branch} {cwd} {number} {status}
   format: "{topic}",
   // Used instead of `format` when the lead pane's branch has an open pull
-  // request. Takes the same tokens plus {pr} and {pr_title}. "" turns PR
-  // lookups off.
-  pr_format: "PR#{pr}: {pr_title}",
+  // request. Takes the same tokens plus {pr}, {pr_title} and {ci} (a mark for
+  // the PR's checks). "" turns PR lookups off.
+  pr_format: "{ci} PR#{pr}: {pr_title}",
   max_label_length: 40,
   // Once you rename a Space by hand, it is yours -- we stop writing to it.
   respect_manual_names: true,
@@ -277,13 +279,22 @@ function saveState(next, liveIds) {
 //
 // A lookup is a GitHub round trip (most of a second), and this script runs on
 // nearly every focus change, often as several copies at once. So answers are
-// cached per checkout and branch for PR_TTL_MS -- Spaces sharing a checkout
-// share one lookup -- and a run claims a stale entry, stamping it fresh while
-// keeping the old answer, before it asks GitHub. A concurrent run that finds
-// the claim reuses the old answer and moves on instead of asking again.
+// cached per checkout and branch -- Spaces sharing a checkout share one
+// lookup -- and a run claims a stale entry, stamping it fresh while keeping
+// the old answer, before it asks GitHub. A concurrent run that finds the
+// claim reuses the old answer and moves on instead of asking again.
+//
+// How long an answer lasts depends on what it was. A branch with no PR yet,
+// or a PR whose checks are still running, is about to change, so it is asked
+// again after PR_TTL_MS. A PR whose checks have settled is asked again after
+// PR_SETTLED_TTL_MS, or as soon as you switch to its Space.
 // ---------------------------------------------------------------------------
 
 const PR_TTL_MS = 2 * 60 * 1000;
+const PR_SETTLED_TTL_MS = 30 * 60 * 1000;
+// A focus switch skips the cache unless the answer is younger than this, so a
+// burst of focus events costs one lookup, not one each.
+const PR_FOCUS_MIN_AGE_MS = 10 * 1000;
 const PR_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function loadPrCache() {
@@ -314,6 +325,29 @@ function savePrEntry(key, entry) {
   }
 }
 
+// The {ci} mark for each verdict. Emoji, because a Space label is plain text
+// and these carry their own colour. Pending and no-checks get no mark.
+const CI_MARKS = { pass: "✅", fail: "❌" };
+
+// Conclusions and commit-status states that mean a check did not pass.
+const CI_FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+
+// Roll a PR's checks up into one verdict, as GitHub's own badge does: any
+// failure fails (a red cross will not turn green by waiting), anything still
+// running is pending, otherwise it passes. "" when the PR has no checks.
+function ciState(checks) {
+  if (!Array.isArray(checks) || !checks.length) return "";
+  let pending = false;
+  for (const c of checks) {
+    // A CheckRun (Actions) has status + conclusion; a legacy commit
+    // StatusContext has only state.
+    const verdict = c.conclusion || c.state || "";
+    if (CI_FAILED.has(verdict)) return "fail";
+    if ((c.status && c.status !== "COMPLETED") || verdict === "PENDING" || verdict === "EXPECTED") pending = true;
+  }
+  return pending ? "pending" : "pass";
+}
+
 // The open PR for the branch checked out at `root`. `gh pr view` with no
 // argument finds the branch's PR the way gh always does -- tracking remote,
 // forks included -- but also returns merged and closed ones, so anything not
@@ -323,7 +357,7 @@ function savePrEntry(key, entry) {
 // logged in, offline), so a network blip keeps the last answer instead of
 // flipping the Space back to its topic.
 function fetchPr(root) {
-  const r = spawnSync("gh", ["pr", "view", "--json", "number,title,state"], {
+  const r = spawnSync("gh", ["pr", "view", "--json", "number,title,state,statusCheckRollup"], {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -334,13 +368,14 @@ function fetchPr(root) {
   if (r.status !== 0) return /no pull requests found/i.test(r.stderr || "") ? null : undefined;
   try {
     const pr = JSON.parse(r.stdout);
-    return pr.state === "OPEN" ? { number: pr.number, title: normalize(pr.title) } : null;
+    if (pr.state !== "OPEN") return null;
+    return { number: pr.number, title: normalize(pr.title), ci: ciState(pr.statusCheckRollup) };
   } catch {
     return undefined;
   }
 }
 
-function prFor(head) {
+function prFor(head, refresh) {
   if (!head.root || !head.branch) return null;
   const key = `${head.root}::${head.branch}`;
   // Fresh from disk, not a copy read at startup: a concurrent run may have
@@ -348,7 +383,10 @@ function prFor(head) {
   const hit = loadPrCache()[key];
   // A claim on a branch never looked up before has no answer to lend (no `pr`
   // key at all), so that one we look up ourselves rather than guess "no PR".
-  if (hit && "pr" in hit && Date.now() - hit.at < PR_TTL_MS) return hit.pr;
+  const age = hit ? Date.now() - hit.at : Infinity;
+  const settled = hit?.pr && hit.pr.ci !== "pending";
+  const ttl = refresh ? PR_FOCUS_MIN_AGE_MS : settled ? PR_SETTLED_TTL_MS : PR_TTL_MS;
+  if (hit && "pr" in hit && age < ttl) return hit.pr;
   const previous = hit?.pr;
   savePrEntry(key, { at: Date.now(), pr: previous });
   const fetched = fetchPr(head.root);
@@ -431,7 +469,8 @@ function plan(cfg, session, state) {
       wantsPr || cfg.fallback === "branch" || /\{branch\}/.test(String(cfg.format) + cfg.pr_format);
     const head = wantsBranch ? gitHead(cwd) : { root: "", branch: "" };
     const branch = head.branch;
-    const pr = wantsPr ? prFor(head) : null;
+    const focused = process.env.HERDR_WORKSPACE_ID ? id === process.env.HERDR_WORKSPACE_ID : ws.focused;
+    const pr = wantsPr ? prFor(head, FOCUS_EVENT && focused) : null;
 
     let body = topic;
     if (!body) {
@@ -450,6 +489,7 @@ function plan(cfg, session, state) {
         applyFormat(pr ? cfg.pr_format : cfg.format, {
           pr: pr ? pr.number : "",
           pr_title: pr ? pr.title : "",
+          ci: pr ? CI_MARKS[pr.ci] || "" : "",
           topic: body,
           agent: pane.agent || "",
           original: rec.original,
