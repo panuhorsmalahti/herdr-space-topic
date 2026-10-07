@@ -86,6 +86,13 @@ instead of its CI mark: it cannot be merged either way, so that is the thing to
 know. The marks are emoji because a Space label is plain text and these carry
 their own colour.
 
+An approved PR also gets 📝, in front of the other mark:
+
+```text
+📝 ✅ PR#270: docs(agents): drop the mig…    approved, every check passed
+📝 🔀 PR#232: feat(voice): run voice cha…    approved, but has conflicts
+```
+
 The PR keeps its name while an agent rebases it to fix those conflicts: HEAD is
 detached for the length of a rebase, so the plugin reads the branch being
 rebased from git instead.
@@ -116,14 +123,15 @@ Other agents are looked up in herdr's directory for the pane; Spaces sharing
 one checkout there share its branch, and therefore its PR name.
 
 Change the shape with `pr_format`, which takes every `format` token plus `{pr}`,
-`{pr_title}` and `{ci}` (the mark, or nothing when the PR has no checks and no
-conflicts); set it to `""` to turn PR lookups off:
+`{pr_title}`, `{review}` (📝 when approved, else nothing) and `{ci}` (the CI or
+conflict mark, or nothing when the PR has no checks and no conflicts); set it
+to `""` to turn PR lookups off:
 
 ```toml
-pr_format = "{ci} PR#{pr}: {pr_title}"   # default
-pr_format = "PR#{pr}: {pr_title}"        # no CI mark
-pr_format = "#{pr} {ci} {topic}"         # #265 ✅ Fix flaky auth test
-pr_format = ""                           # topics only, never call gh
+pr_format = "{review} {ci} PR#{pr}: {pr_title}"   # default
+pr_format = "PR#{pr}: {pr_title}"                 # no marks
+pr_format = "#{pr} {review}{ci} {topic}"          # #265 📝✅ Fix flaky auth test
+pr_format = ""                                    # topics only, never call gh
 ```
 
 PR titles run long, so consider raising `max_label_length` alongside.
@@ -176,7 +184,7 @@ cp examples/default-config.toml "$(herdr plugin config-dir phorsmalahti.space-to
 | `source` | `"first"` | which pane speaks for the Space: `first` or `active` |
 | `fallback` | `"original"` | with no topic: `original`, `branch`, `cwd`, `keep` |
 | `format` | `"{topic}"` | `{topic} {agent} {original} {branch} {cwd} {number} {status}` |
-| `pr_format` | `"{ci} PR#{pr}: {pr_title}"` | used instead of `format` when the branch has an open PR; adds `{pr} {pr_title} {ci}`; `""` turns it off |
+| `pr_format` | `"{review} {ci} PR#{pr}: {pr_title}"` | used instead of `format` when the branch has an open PR; adds `{pr} {pr_title} {review} {ci}`; `""` turns it off |
 | `max_label_length` | `40` | truncate after formatting (clamped 8–80) |
 | `respect_manual_names` | `true` | never overwrite a Space you renamed |
 | `require_agent` | `true` | only manage Spaces that host an agent |

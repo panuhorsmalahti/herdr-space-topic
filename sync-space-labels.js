@@ -69,9 +69,10 @@ const DEFAULTS = {
   // Tokens: {topic} {agent} {original} {branch} {cwd} {number} {status}
   format: "{topic}",
   // Used instead of `format` when the lead pane's branch has an open pull
-  // request. Takes the same tokens plus {pr}, {pr_title} and {ci} (a mark for
-  // the PR's checks, or for merge conflicts). "" turns PR lookups off.
-  pr_format: "{ci} PR#{pr}: {pr_title}",
+  // request. Takes the same tokens plus {pr}, {pr_title}, {review} (a mark
+  // when the PR is approved) and {ci} (a mark for its checks, or for merge
+  // conflicts). "" turns PR lookups off.
+  pr_format: "{review} {ci} PR#{pr}: {pr_title}",
   max_label_length: 40,
   // Once you rename a Space by hand, it is yours -- we stop writing to it.
   respect_manual_names: true,
@@ -181,8 +182,11 @@ function normalize(value) {
     .trim();
 }
 
+// By code point, not UTF-16 unit: an emoji mark is two units, and cutting
+// between them leaves a broken character in the sidebar.
 function cap(str, max) {
-  return str.length > max ? `${str.slice(0, max - 1).trimEnd()}…` : str;
+  const chars = Array.from(str);
+  return chars.length > max ? `${chars.slice(0, max - 1).join("").trimEnd()}…` : str;
 }
 
 // Substitute {token}s. Unknown tokens are left literal so a typo is visible in
@@ -364,6 +368,9 @@ function saveState(next, liveIds) {
 // as you switch to its Space.
 // ---------------------------------------------------------------------------
 
+// Bumped whenever an entry gains a field; entries of another version are
+// treated as never looked up, so an upgrade does not trust half an answer.
+const PR_CACHE_VERSION = 2;
 const PR_TTL_MS = 2 * 60 * 1000;
 const PR_SETTLED_TTL_MS = 30 * 60 * 1000;
 // A focus switch skips the cache unless the answer is younger than this, so a
@@ -412,6 +419,9 @@ function ciMark(pr) {
   return pr.mergeable === "CONFLICTING" ? CONFLICT_MARK : CI_MARKS[pr.ci] || "";
 }
 
+// The {review} mark, from GitHub's reviewDecision. Only approval has one.
+const REVIEW_MARKS = { APPROVED: "📝" };
+
 // Conclusions and commit-status states that mean a check did not pass.
 const CI_FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
 
@@ -441,7 +451,8 @@ function ciState(checks) {
 // logged in, offline), so a network blip keeps the last answer instead of
 // flipping the Space back to its topic.
 function fetchPr(root, branch) {
-  const args = ["pr", "view", ...(branch ? [branch] : []), "--json", "number,title,state,mergeable,statusCheckRollup"];
+  const fields = "number,title,state,mergeable,reviewDecision,statusCheckRollup";
+  const args = ["pr", "view", ...(branch ? [branch] : []), "--json", fields];
   const r = spawnSync("gh", args, {
     cwd: root,
     encoding: "utf8",
@@ -461,6 +472,8 @@ function fetchPr(root, branch) {
       title: normalize(pr.title),
       ci: ciState(pr.statusCheckRollup),
       mergeable: pr.mergeable || "UNKNOWN",
+      // APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or "" with no rules.
+      review: pr.reviewDecision || "",
     };
   } catch {
     return undefined;
@@ -472,20 +485,19 @@ function prFor(head, refresh) {
   const key = `${head.root}::${head.branch}`;
   // Fresh from disk, not a copy read at startup: a concurrent run may have
   // claimed this entry a moment ago.
-  const hit = loadPrCache()[key];
+  const cached = loadPrCache()[key];
+  const hit = cached?.v === PR_CACHE_VERSION ? cached : undefined;
   // A claim on a branch never looked up before has no answer to lend (no `pr`
   // key at all), so that one we look up ourselves rather than guess "no PR".
   const age = hit ? Date.now() - hit.at : Infinity;
-  // An entry cached before `mergeable` was looked up has it missing, and so
-  // counts as unsettled too: it is refreshed rather than trusted for 30 min.
-  const settled = hit?.pr && hit.pr.ci !== "pending" && hit.pr.mergeable && hit.pr.mergeable !== "UNKNOWN";
+  const settled = hit?.pr && hit.pr.ci !== "pending" && hit.pr.mergeable !== "UNKNOWN";
   const ttl = refresh ? PR_FOCUS_MIN_AGE_MS : settled ? PR_SETTLED_TTL_MS : PR_TTL_MS;
   if (hit && "pr" in hit && age < ttl) return hit.pr;
   const previous = hit?.pr;
-  savePrEntry(key, { at: Date.now(), pr: previous });
+  savePrEntry(key, { v: PR_CACHE_VERSION, at: Date.now(), pr: previous });
   const fetched = fetchPr(head.root, head.rebasing ? head.branch : "");
   const pr = fetched === undefined ? previous ?? null : fetched;
-  savePrEntry(key, { at: Date.now(), pr });
+  savePrEntry(key, { v: PR_CACHE_VERSION, at: Date.now(), pr });
   return pr;
 }
 
@@ -584,6 +596,7 @@ function plan(cfg, session, state) {
           pr: pr ? pr.number : "",
           pr_title: pr ? pr.title : "",
           ci: ciMark(pr),
+          review: (pr && REVIEW_MARKS[pr.review]) || "",
           topic: body,
           agent: pane.agent || "",
           original: rec.original,
