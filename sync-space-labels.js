@@ -36,13 +36,19 @@ const STATE_DIR = process.env.HERDR_PLUGIN_STATE_DIR || ".";
 const STATE_PATH = join(STATE_DIR, "space-topic-state.json");
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 const PR_CACHE_PATH = join(STATE_DIR, "space-topic-prs.json");
+const LOCK_PATH = join(STATE_DIR, "space-topic.lock");
+const RERUN_PATH = join(STATE_DIR, "space-topic.rerun");
 
 const argv = process.argv.slice(2);
 const DRY_RUN = argv.includes("--dry-run");
 const RESTORE = argv.includes("--restore");
 const ADOPT = argv.includes("--adopt");
-// Switching to a Space re-checks its pull request and CI on the spot.
-const FOCUS_EVENT = process.env.HERDR_PLUGIN_EVENT === "workspace.focused";
+// Switching to a Space re-checks its pull request on the spot. A run names
+// the Space to re-check: herdr's id for it, or FOCUSED ("whichever is
+// focused") when herdr gives none. A run that has to leave its work to one
+// already in progress hands the name on (see "Taking turns").
+const FOCUSED = "@focused";
+const REFRESH = process.env.HERDR_PLUGIN_EVENT === "workspace.focused" ? [process.env.HERDR_WORKSPACE_ID || FOCUSED] : [];
 
 // ---------------------------------------------------------------------------
 // Config
@@ -280,6 +286,17 @@ function claudeCwd(pane) {
   return "";
 }
 
+// The labels herdr itself gives a Space it has not been told to call anything
+// else: the names of the directories its panes are in.
+function paneDirs(id, panes) {
+  const names = new Set();
+  for (const p of panes) {
+    if (p.workspace_id !== id) continue;
+    for (const dir of [p.cwd, p.foreground_cwd]) if (dir) names.add(normalize(baseName(dir)));
+  }
+  return names;
+}
+
 function baseName(p) {
   if (!p) return "";
   const parts = String(p).split(/[\\/]/).filter(Boolean);
@@ -340,7 +357,8 @@ function saveState(next, liveIds) {
       if (label && !history.includes(label)) history.push(label);
       if (history.length >= HISTORY_LIMIT) break;
     }
-    merged.spaces[id] = { original: b.original || a.original || "", history };
+    // Ours wins: runs take turns, so what we hold is newer than the disk.
+    merged.spaces[id] = { original: a.original || b.original || "", history };
   }
   try {
     mkdirSync(STATE_DIR, { recursive: true });
@@ -593,7 +611,7 @@ function pickPane(ws, tabs, panes, cfg) {
   return cfg.require_agent ? null : candidates[0];
 }
 
-function plan(cfg, session, state) {
+function plan(cfg, session, state, refresh = new Set()) {
   const { workspaces, tabs, panes } = session;
   const items = [];
 
@@ -603,6 +621,14 @@ function plan(cfg, session, state) {
     const rec = state.spaces[id] || { original: live, history: [] };
     state.spaces[id] = rec;
     if (!rec.original) rec.original = live;
+    // Until a Space is renamed, herdr keeps re-deriving its label from its
+    // panes' directory: open one while in nexus-monorepo, cd into
+    // prism-agent, and it goes from "nexus-monorepo" to "prism-agent". That
+    // is herdr, not you, so it becomes the Space's original label rather than
+    // looking like a rename that locks the plugin out.
+    if (live !== rec.original && !rec.history.includes(live) && paneDirs(id, panes).has(live)) {
+      rec.original = live;
+    }
 
     if (cfg.skip.includes(id) || cfg.skip.includes(ws.label)) {
       items.push({ ws, rec, skip: "configured skip" });
@@ -623,8 +649,8 @@ function plan(cfg, session, state) {
       wantsPr || cfg.fallback === "branch" || /\{branch\}/.test(String(cfg.format) + cfg.pr_format);
     const head = wantsBranch ? gitHead(cwd) : { root: "", branch: "" };
     const branch = head.branch;
-    const focused = process.env.HERDR_WORKSPACE_ID ? id === process.env.HERDR_WORKSPACE_ID : ws.focused;
-    const pr = wantsPr ? prFor(head, FOCUS_EVENT && focused) : null;
+    const recheck = refresh.has(id) || (refresh.has(FOCUSED) && ws.focused);
+    const pr = wantsPr ? prFor(head, recheck) : null;
 
     let body = topic;
     if (!body) {
@@ -763,30 +789,107 @@ function doAdopt(session, state) {
 }
 
 // ---------------------------------------------------------------------------
+// Taking turns
+//
+// herdr fires several of our events at once, and copies of this script used
+// to run side by side. They undid each other: one would write a fresh PR mark
+// and a slower one, holding the answer from a moment before, would write the
+// old label back; one that read the Space list before a Space existed would
+// drop that Space's record as closed. So runs now take turns. A run that
+// finds another in progress leaves a note in RERUN_PATH -- with any Space it
+// was asked to re-check -- and exits; the run in progress does one more pass
+// for every note it finds, reading the session afresh each time.
+// ---------------------------------------------------------------------------
+
+const LOCK_WAIT_MS = 30 * 1000;
+let lockHeld = false;
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// A lock whose process is gone (killed mid-run) must not block us forever.
+function lockIsStale() {
+  try {
+    const pid = Number(readFileSync(LOCK_PATH, "utf8"));
+    if (!pid) return Date.now() - fs.statSync(LOCK_PATH).mtimeMs > 10 * 1000; // still being written?
+    process.kill(pid, 0); // throws ESRCH once the process is gone
+    return false;
+  } catch (err) {
+    return err.code === "ESRCH" || err.code === "ENOENT";
+  }
+}
+
+function tryLock() {
+  try {
+    mkdirSync(STATE_DIR, { recursive: true });
+  } catch {
+    // Reported by the open below.
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(LOCK_PATH, "wx");
+      fs.writeSync(fd, String(process.pid));
+      fs.closeSync(fd);
+      lockHeld = true;
+      return true;
+    } catch (err) {
+      if (err.code !== "EEXIST") return true; // cannot lock at all: run unguarded, as before
+      if (!lockIsStale()) return false;
+      // Rename rather than delete, so of two runs clearing the same stale lock
+      // only one succeeds, and neither removes the other's fresh one.
+      try {
+        const stale = `${LOCK_PATH}.${process.pid}.stale`;
+        renameSync(LOCK_PATH, stale);
+        rmSync(stale, { force: true });
+      } catch {
+        // Someone else cleared it first; try again.
+      }
+    }
+  }
+  return false;
+}
+
+function unlock() {
+  if (lockHeld) rmSync(LOCK_PATH, { force: true });
+  lockHeld = false;
+}
+
+function askForRerun(refresh) {
+  try {
+    fs.appendFileSync(RERUN_PATH, `${refresh.join("\n")}\n`);
+  } catch (err) {
+    process.stderr.write(`space-topic: cannot leave a rerun note: ${err.message}\n`);
+  }
+}
+
+// Take every pending note at once -- renamed first, so a note added while we
+// read lands in a fresh file -- and return the Spaces they ask to re-check.
+function takeRerun() {
+  const taken = `${RERUN_PATH}.${process.pid}`;
+  try {
+    renameSync(RERUN_PATH, taken);
+  } catch {
+    return [];
+  }
+  let ids = [];
+  try {
+    ids = readFileSync(taken, "utf8").split("\n").filter(Boolean);
+  } catch {
+    // An empty note still meant "run again", which this pass does.
+  }
+  rmSync(taken, { force: true });
+  return ids;
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-function main() {
-  const cfg = loadConfig();
+function syncOnce(cfg, refresh) {
   const state = loadState();
   const session = readSession();
-  const liveIds = new Set(session.workspaces.map((w) => w.workspace_id));
-
-  if (ADOPT) return doAdopt(session, state);
-  if (RESTORE) return doRestore(cfg, session, state);
-  if (!cfg.enabled) return;
-
-  const items = plan(cfg, session, state);
-
-  if (DRY_RUN) {
-    for (const it of items) {
-      const id = it.ws.workspace_id;
-      if (it.skip) process.stdout.write(`${id}  "${it.ws.label}"  --  skipped: ${it.skip}\n`);
-      else if (!it.changed) process.stdout.write(`${id}  "${it.ws.label}"  --  already current\n`);
-      else process.stdout.write(`${id}  "${it.ws.label}"  ->  "${it.label}"\n`);
-    }
-    return;
-  }
+  const items = plan(cfg, session, state, refresh);
 
   let wrote = 0;
   for (const it of items) {
@@ -799,8 +902,70 @@ function main() {
     }
   }
 
-  saveState(state, liveIds);
+  saveState(state, new Set(session.workspaces.map((w) => w.workspace_id)));
   if (wrote) process.stdout.write(`space-topic: renamed ${wrote} space(s)\n`);
+}
+
+function sync(cfg) {
+  let refresh = REFRESH;
+  for (;;) {
+    if (!tryLock()) {
+      askForRerun(refresh);
+      // The run in progress may have finished between our attempt and the
+      // note; if the lock is free now, the note is ours to act on.
+      if (!tryLock()) return;
+    }
+    try {
+      let pending = refresh;
+      do {
+        syncOnce(cfg, new Set([...pending, ...takeRerun()]));
+        pending = [];
+      } while (fs.existsSync(RERUN_PATH));
+    } finally {
+      unlock();
+    }
+    refresh = [];
+    // A note left after our last look but before we let go: go round again.
+    if (!fs.existsSync(RERUN_PATH)) return;
+  }
+}
+
+// --adopt and --restore must run, not hand off, so they wait their turn.
+function withLock(fn) {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  while (!tryLock() && Date.now() < deadline) sleep(100);
+  try {
+    fn();
+  } finally {
+    unlock();
+  }
+}
+
+function main() {
+  const cfg = loadConfig();
+
+  if (ADOPT || RESTORE) {
+    return withLock(() => {
+      const state = loadState();
+      const session = readSession();
+      if (ADOPT) doAdopt(session, state);
+      else doRestore(cfg, session, state);
+    });
+  }
+  if (!cfg.enabled) return;
+
+  if (DRY_RUN) {
+    // Read-only, so it neither waits nor takes a turn.
+    for (const it of plan(cfg, readSession(), loadState(), new Set(REFRESH))) {
+      const id = it.ws.workspace_id;
+      if (it.skip) process.stdout.write(`${id}  "${it.ws.label}"  --  skipped: ${it.skip}\n`);
+      else if (!it.changed) process.stdout.write(`${id}  "${it.ws.label}"  --  already current\n`);
+      else process.stdout.write(`${id}  "${it.ws.label}"  ->  "${it.label}"\n`);
+    }
+    return;
+  }
+
+  sync(cfg);
 }
 
 try {

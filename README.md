@@ -154,6 +154,12 @@ Rename a Space by hand and the plugin stops writing to it. It tracks the labels
 it has written; a live label it does not recognise is a name you typed, and it
 leaves it alone from then on.
 
+The exception is a label that matches the directory one of the Space's panes is
+in. Until a Space is renamed, herdr keeps re-deriving its label from there:
+open a Space while in one checkout, `cd` into another, and its label follows.
+That is herdr, not you, so the plugin keeps naming the Space. It also means a
+Space you rename to its directory name is handed back.
+
 To hand a Space back, rename it to its original label, or run:
 
 ```bash
@@ -231,10 +237,14 @@ actually changes.
 
 ## Notes
 
-- **Concurrency.** herdr fires several of these events at once, so copies of
-  the script run concurrently. State is a short history of labels per Space
-  rather than one string, so concurrent runs merge instead of clobbering, and
-  writes to the state file are atomic.
+- **Concurrency.** herdr fires several of these events at once, and copies
+  of the script running side by side used to undo each other: a slower copy
+  would write back a label a faster one had just refreshed. So runs take
+  turns, through a lock file in the state directory. A run that finds another
+  in progress leaves a note, naming any Space it was asked to re-check, and
+  exits; the run in progress does one more pass for it. A lock left by a
+  killed run is detected by its process id and cleared. Writes to the state
+  file stay atomic.
 - **State** lives in `HERDR_PLUGIN_STATE_DIR`. Delete it and the plugin treats
   the labels currently on screen as the originals — `restore` then puts those
   back rather than the directory names.
