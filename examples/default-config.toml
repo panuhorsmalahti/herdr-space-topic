@@ -65,7 +65,7 @@ format = "{topic}"
 #               🟣 alone once the PR is merged ({review} and {comments}
 #               are then empty)
 #   {comments}  💬 when the PR has review threads nobody has resolved
-# Re-checked when you switch to the Space, every ~30 minutes once checks have
+# Re-checked when you switch to the Space, every ~20 minutes once checks have
 # settled, and every ~2 minutes while they run or before a PR exists. A merged
 # PR is never re-checked.
 # Set to "" to turn PR lookups off entirely.

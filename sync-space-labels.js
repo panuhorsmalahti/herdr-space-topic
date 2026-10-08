@@ -373,7 +373,7 @@ function saveState(next, liveIds) {
 // treated as never looked up, so an upgrade does not trust half an answer.
 const PR_CACHE_VERSION = 3;
 const PR_TTL_MS = 2 * 60 * 1000;
-const PR_SETTLED_TTL_MS = 30 * 60 * 1000;
+const PR_SETTLED_TTL_MS = 20 * 60 * 1000;
 // A focus switch skips the cache unless the answer is younger than this, so a
 // burst of focus events costs one lookup, not one each.
 const PR_FOCUS_MIN_AGE_MS = 10 * 1000;

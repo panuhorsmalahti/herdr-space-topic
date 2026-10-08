@@ -113,7 +113,7 @@ A PR, its checks and its review threads are looked up together, and
 refreshed:
 
 - **when you switch to the Space**, straight away;
-- **every 30 minutes or so** once its checks have settled on ✅ or ❌;
+- **every 20 minutes or so** once its checks have settled on ✅ or ❌;
 - **every 2 minutes** while checks are still running, or while the branch has
   no PR yet, so a result or a newly opened PR shows up quickly;
 - **never again** once it is merged, not even on focus: a merged PR is final.
