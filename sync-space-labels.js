@@ -70,9 +70,10 @@ const DEFAULTS = {
   format: "{topic}",
   // Used instead of `format` when the lead pane's branch has an open or merged
   // pull request. Takes the same tokens plus {pr}, {pr_title}, {review} (a
-  // mark when the PR is approved) and {ci} (a mark for its checks, merge
-  // conflicts, or 🟣 once merged). "" turns PR lookups off.
-  pr_format: "{review} {ci} PR#{pr}: {pr_title}",
+  // mark when the PR is approved), {ci} (a mark for its checks, merge
+  // conflicts, or 🟣 once merged) and {comments} (a mark for unresolved
+  // review threads). "" turns PR lookups off.
+  pr_format: "{review} {ci} {comments} PR#{pr}: {pr_title}",
   max_label_length: 40,
   // Once you rename a Space by hand, it is yours -- we stop writing to it.
   respect_manual_names: true,
@@ -370,7 +371,7 @@ function saveState(next, liveIds) {
 
 // Bumped whenever an entry gains a field; entries of another version are
 // treated as never looked up, so an upgrade does not trust half an answer.
-const PR_CACHE_VERSION = 2;
+const PR_CACHE_VERSION = 3;
 const PR_TTL_MS = 2 * 60 * 1000;
 const PR_SETTLED_TTL_MS = 30 * 60 * 1000;
 // A focus switch skips the cache unless the answer is younger than this, so a
@@ -420,17 +421,20 @@ const CI_MARKS = { pass: "✅", fail: "❌", pending: "🟡" };
 const CONFLICT_MARK = "🔀";
 // The {review} mark, from GitHub's reviewDecision. Only approval has one.
 const REVIEW_MARKS = { APPROVED: "📝" };
+// The {comments} mark: the PR has review threads nobody has resolved.
+const COMMENTS_MARK = "💬";
 // A merged PR's only mark, in GitHub's merged purple: its checks, conflicts
 // and reviews no longer matter.
 const MERGED_MARK = "🟣";
 
-// The {review} and {ci} marks for a PR (or for no PR: none).
+// The {review}, {ci} and {comments} marks for a PR (or for no PR: none).
 function prMarks(pr) {
-  if (!pr) return { review: "", ci: "" };
-  if (pr.state === "MERGED") return { review: "", ci: MERGED_MARK };
+  if (!pr) return { review: "", ci: "", comments: "" };
+  if (pr.state === "MERGED") return { review: "", ci: MERGED_MARK, comments: "" };
   return {
     review: REVIEW_MARKS[pr.review] || "",
     ci: pr.mergeable === "CONFLICTING" ? CONFLICT_MARK : CI_MARKS[pr.ci] || "",
+    comments: pr.comments > 0 ? COMMENTS_MARK : "",
   };
 }
 
@@ -462,22 +466,27 @@ function ciState(checks) {
 // Returns null for "no PR" and undefined for "could not tell" (no gh, not
 // logged in, offline), so a network blip keeps the last answer instead of
 // flipping the Space back to its topic.
-function fetchPr(root, branch) {
-  const fields = "number,title,state,mergeable,reviewDecision,statusCheckRollup";
-  const args = ["pr", "view", ...(branch ? [branch] : []), "--json", fields];
-  const r = spawnSync("gh", args, {
-    cwd: root,
+function gh(args, cwd) {
+  return spawnSync("gh", args, {
+    cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 10000,
     env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" },
   });
+}
+
+function fetchPr(root, branch) {
+  const fields = "id,url,number,title,state,mergeable,reviewDecision,statusCheckRollup";
+  const r = gh(["pr", "view", ...(branch ? [branch] : []), "--json", fields], root);
   if (r.error) return undefined;
   if (r.status !== 0) return /no pull requests found/i.test(r.stderr || "") ? null : undefined;
   try {
     const pr = JSON.parse(r.stdout);
     if (pr.state === "MERGED") return { number: pr.number, title: normalize(pr.title), state: "MERGED" };
     if (pr.state !== "OPEN") return null;
+    const comments = openThreads(pr.id, pr.url);
+    if (comments === undefined) return undefined; // half an answer is no answer
     // mergeable: MERGEABLE, CONFLICTING, or UNKNOWN while GitHub works it out
     // in the background (after a push, or after the base branch moves).
     return {
@@ -488,7 +497,31 @@ function fetchPr(root, branch) {
       mergeable: pr.mergeable || "UNKNOWN",
       // APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or "" with no rules.
       review: pr.reviewDecision || "",
+      comments,
     };
+  } catch {
+    return undefined;
+  }
+}
+
+// How many review threads on a PR nobody has resolved. `gh pr view` cannot
+// tell resolved from unresolved, so this is a GraphQL query of its own -- by
+// the PR's node id, on the host its URL names (GitHub Enterprise included).
+// Only the first 100 threads are counted. undefined when gh fails.
+const THREADS_QUERY = "query($id: ID!) { node(id: $id) { ... on PullRequest { reviewThreads(first: 100) { nodes { isResolved } } } } }";
+
+function openThreads(id, url) {
+  let host = "github.com";
+  try {
+    host = new URL(url).host;
+  } catch {
+    // No URL: assume github.com.
+  }
+  const r = gh(["api", "graphql", "--hostname", host, "-f", `query=${THREADS_QUERY}`, "-f", `id=${id}`]);
+  if (r.error || r.status !== 0) return undefined;
+  try {
+    const threads = JSON.parse(r.stdout)?.data?.node?.reviewThreads?.nodes;
+    return Array.isArray(threads) ? threads.filter((t) => !t.isResolved).length : undefined;
   } catch {
     return undefined;
   }

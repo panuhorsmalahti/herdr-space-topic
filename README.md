@@ -87,12 +87,17 @@ instead of its CI mark: it cannot be merged either way, so that is the thing to
 know. The marks are emoji because a Space label is plain text and these carry
 their own colour.
 
-An approved PR also gets 📝, in front of the other mark:
+An approved PR also gets 📝 in front of the other mark, and a PR with review
+threads nobody has resolved gets 💬 after it:
 
 ```text
 📝 ✅ PR#270: docs(agents): drop the mig…    approved, every check passed
-📝 🔀 PR#232: feat(voice): run voice cha…    approved, but has conflicts
+📝 🔀 💬 PR#232: feat(voice): run voice…    approved, conflicts, open threads
+✅ 💬 PR#714: fix(infra): stop the secr…    green, open review threads
 ```
+
+💬 counts code review threads still unresolved, not general PR comments, which
+cannot be resolved and so would never clear. A merged PR shows 🟣 alone.
 
 The PR keeps its name while an agent rebases it to fix those conflicts: HEAD is
 detached for the length of a rebase, so the plugin reads the branch being
@@ -104,7 +109,8 @@ its name with 🟣 as its only mark, since checks, conflicts and reviews no
 longer matter; a PR closed without merging counts as no PR, so that Space goes
 back to its topic.
 
-A PR and its checks come from the same lookup, which is refreshed:
+A PR, its checks and its review threads are looked up together, and
+refreshed:
 
 - **when you switch to the Space**, straight away;
 - **every 30 minutes or so** once its checks have settled on ✅ or ❌;
@@ -128,12 +134,13 @@ Other agents are looked up in herdr's directory for the pane; Spaces sharing
 one checkout there share its branch, and therefore its PR name.
 
 Change the shape with `pr_format`, which takes every `format` token plus `{pr}`,
-`{pr_title}`, `{review}` (📝 when approved, else nothing) and `{ci}` (the CI or
-conflict mark, or nothing when the PR has no checks and no conflicts); set it
-to `""` to turn PR lookups off:
+`{pr_title}`, `{review}` (📝 when approved, else nothing), `{ci}` (the CI or
+conflict mark, or nothing when the PR has no checks and no conflicts) and
+`{comments}` (💬 with unresolved review threads, else nothing); set it to `""`
+to turn PR lookups off:
 
 ```toml
-pr_format = "{review} {ci} PR#{pr}: {pr_title}"   # default
+pr_format = "{review} {ci} {comments} PR#{pr}: {pr_title}"   # default
 pr_format = "PR#{pr}: {pr_title}"                 # no marks
 pr_format = "#{pr} {review}{ci} {topic}"          # #265 📝✅ Fix flaky auth test
 pr_format = ""                                    # topics only, never call gh
@@ -189,7 +196,7 @@ cp examples/default-config.toml "$(herdr plugin config-dir phorsmalahti.space-to
 | `source` | `"first"` | which pane speaks for the Space: `first` or `active` |
 | `fallback` | `"original"` | with no topic: `original`, `branch`, `cwd`, `keep` |
 | `format` | `"{topic}"` | `{topic} {agent} {original} {branch} {cwd} {number} {status}` |
-| `pr_format` | `"{review} {ci} PR#{pr}: {pr_title}"` | used instead of `format` when the branch has an open or merged PR; adds `{pr} {pr_title} {review} {ci}`; `""` turns it off |
+| `pr_format` | `"{review} {ci} {comments} PR#{pr}: {pr_title}"` | used instead of `format` when the branch has an open or merged PR; adds `{pr} {pr_title} {review} {ci} {comments}`; `""` turns it off |
 | `max_label_length` | `40` | truncate after formatting (clamped 8–80) |
 | `respect_manual_names` | `true` | never overwrite a Space you renamed |
 | `require_agent` | `true` | only manage Spaces that host an agent |
@@ -233,8 +240,10 @@ actually changes.
   back rather than the directory names.
 - **Git and GitHub.** `git` only runs when something needs the branch:
   `pr_format`, `fallback = "branch"`, or `{branch}` in a format. `gh` only runs
-  when `pr_format` is set, at most once per checkout and branch per refresh
-  (see above); the cache sits next to the state as `space-topic-prs.json`.
+  when `pr_format` is set, once per checkout and branch per refresh (see
+  above): `gh pr view`, plus a GraphQL query for review threads when the PR is
+  open, since `gh pr view` cannot tell resolved threads from unresolved. The
+  cache sits next to the state as `space-topic-prs.json`.
 - **Verified** against herdr 0.9.0 on macOS with Claude Code and Codex panes.
   `min_herdr_version` is `0.9.0` because that is what it has been run against,
   not because older versions are known to break.

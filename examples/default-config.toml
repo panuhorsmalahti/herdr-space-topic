@@ -62,17 +62,19 @@ format = "{topic}"
 #   {ci}        ✅ when every check passed, ❌ when one failed, 🟡 while
 #               checks are still running, nothing when the PR has none;
 #               🔀 instead of any of those when the PR has merge conflicts;
-#               🟣 alone once the PR is merged ({review} is then empty)
+#               🟣 alone once the PR is merged ({review} and {comments}
+#               are then empty)
+#   {comments}  💬 when the PR has review threads nobody has resolved
 # Re-checked when you switch to the Space, every ~30 minutes once checks have
 # settled, and every ~2 minutes while they run or before a PR exists. A merged
 # PR is never re-checked.
 # Set to "" to turn PR lookups off entirely.
 #
 # Examples:
-#   pr_format = "{review} {ci} PR#{pr}: {pr_title}" -> "📝 ✅ PR#265: feat(webhooks): an…"
+#   pr_format = "{review} {ci} {comments} PR#{pr}: {pr_title}" -> "📝 ✅ 💬 PR#265: feat(webhooks…"
 #   pr_format = "PR#{pr}: {pr_title}"               -> "PR#265: feat(webhooks): answer t…"
 #   pr_format = "#{pr} {review}{ci} {topic}"        -> "#265 📝✅ Fix flaky auth test"
-pr_format = "{review} {ci} PR#{pr}: {pr_title}"
+pr_format = "{review} {ci} {comments} PR#{pr}: {pr_title}"
 
 # Truncate longer labels (an ellipsis is appended). Applied after formatting,
 # so it caps the final label including any prefix. Clamped to 8..80.
