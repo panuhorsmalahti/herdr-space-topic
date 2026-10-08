@@ -68,10 +68,10 @@ const DEFAULTS = {
   fallback: "original",
   // Tokens: {topic} {agent} {original} {branch} {cwd} {number} {status}
   format: "{topic}",
-  // Used instead of `format` when the lead pane's branch has an open pull
-  // request. Takes the same tokens plus {pr}, {pr_title}, {review} (a mark
-  // when the PR is approved) and {ci} (a mark for its checks, or for merge
-  // conflicts). "" turns PR lookups off.
+  // Used instead of `format` when the lead pane's branch has an open or merged
+  // pull request. Takes the same tokens plus {pr}, {pr_title}, {review} (a
+  // mark when the PR is approved) and {ci} (a mark for its checks, merge
+  // conflicts, or 🟣 once merged). "" turns PR lookups off.
   pr_format: "{review} {ci} PR#{pr}: {pr_title}",
   max_label_length: 40,
   // Once you rename a Space by hand, it is yours -- we stop writing to it.
@@ -365,7 +365,7 @@ function saveState(next, liveIds) {
 // a PR whose checks are still running, or one GitHub has not finished
 // checking for conflicts is about to change, so it is asked again after
 // PR_TTL_MS. A settled PR is asked again after PR_SETTLED_TTL_MS, or as soon
-// as you switch to its Space.
+// as you switch to its Space. A merged PR is final and never asked again.
 // ---------------------------------------------------------------------------
 
 // Bumped whenever an entry gains a field; entries of another version are
@@ -394,7 +394,12 @@ function savePrEntry(key, entry) {
   if ((cache[key]?.at ?? 0) > entry.at) return;
   cache[key] = entry;
   for (const [k, e] of Object.entries(cache)) {
-    if (!e || entry.at - (e.at ?? 0) > PR_CACHE_MAX_AGE_MS) delete cache[k];
+    // A merged answer is kept for as long as its checkout exists, so it is
+    // never looked up again; anything else old is dropped.
+    let keep;
+    if (e?.pr?.state === "MERGED") keep = fs.existsSync(k.slice(0, k.lastIndexOf("::")));
+    else keep = Boolean(e) && entry.at - (e.at ?? 0) <= PR_CACHE_MAX_AGE_MS;
+    if (!keep) delete cache[k];
   }
   try {
     mkdirSync(STATE_DIR, { recursive: true });
@@ -413,14 +418,21 @@ const CI_MARKS = { pass: "✅", fail: "❌", pending: "🟡" };
 // Shown instead of the CI mark when the PR has merge conflicts: it cannot be
 // merged whatever its checks say, so that is the thing to know.
 const CONFLICT_MARK = "🔀";
-
-function ciMark(pr) {
-  if (!pr) return "";
-  return pr.mergeable === "CONFLICTING" ? CONFLICT_MARK : CI_MARKS[pr.ci] || "";
-}
-
 // The {review} mark, from GitHub's reviewDecision. Only approval has one.
 const REVIEW_MARKS = { APPROVED: "📝" };
+// A merged PR's only mark, in GitHub's merged purple: its checks, conflicts
+// and reviews no longer matter.
+const MERGED_MARK = "🟣";
+
+// The {review} and {ci} marks for a PR (or for no PR: none).
+function prMarks(pr) {
+  if (!pr) return { review: "", ci: "" };
+  if (pr.state === "MERGED") return { review: "", ci: MERGED_MARK };
+  return {
+    review: REVIEW_MARKS[pr.review] || "",
+    ci: pr.mergeable === "CONFLICTING" ? CONFLICT_MARK : CI_MARKS[pr.ci] || "",
+  };
+}
 
 // Conclusions and commit-status states that mean a check did not pass.
 const CI_FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
@@ -441,13 +453,13 @@ function ciState(checks) {
   return pending ? "pending" : "pass";
 }
 
-// The open PR for the branch checked out at `root`. `gh pr view` with no
-// argument finds the branch's PR the way gh always does -- tracking remote,
-// forks included -- but also returns merged and closed ones, so anything not
-// OPEN counts as none. Mid-rebase gh cannot tell which branch that is, so
-// then we name it (`branch`), at the cost of matching it by name alone.
+// The open or merged PR for the branch checked out at `root`. `gh pr view`
+// with no argument finds the branch's newest PR the way gh always does --
+// tracking remote, forks included. A PR closed without merging counts as none,
+// so that Space keeps its topic. Mid-rebase gh cannot tell which branch that
+// is, so then we name it (`branch`), at the cost of matching it by name alone.
 //
-// Returns null for "no open PR" and undefined for "could not tell" (no gh, not
+// Returns null for "no PR" and undefined for "could not tell" (no gh, not
 // logged in, offline), so a network blip keeps the last answer instead of
 // flipping the Space back to its topic.
 function fetchPr(root, branch) {
@@ -464,12 +476,14 @@ function fetchPr(root, branch) {
   if (r.status !== 0) return /no pull requests found/i.test(r.stderr || "") ? null : undefined;
   try {
     const pr = JSON.parse(r.stdout);
+    if (pr.state === "MERGED") return { number: pr.number, title: normalize(pr.title), state: "MERGED" };
     if (pr.state !== "OPEN") return null;
     // mergeable: MERGEABLE, CONFLICTING, or UNKNOWN while GitHub works it out
     // in the background (after a push, or after the base branch moves).
     return {
       number: pr.number,
       title: normalize(pr.title),
+      state: "OPEN",
       ci: ciState(pr.statusCheckRollup),
       mergeable: pr.mergeable || "UNKNOWN",
       // APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or "" with no rules.
@@ -491,7 +505,8 @@ function prFor(head, refresh) {
   // key at all), so that one we look up ourselves rather than guess "no PR".
   const age = hit ? Date.now() - hit.at : Infinity;
   const settled = hit?.pr && hit.pr.ci !== "pending" && hit.pr.mergeable !== "UNKNOWN";
-  const ttl = refresh ? PR_FOCUS_MIN_AGE_MS : settled ? PR_SETTLED_TTL_MS : PR_TTL_MS;
+  const merged = hit?.pr?.state === "MERGED"; // final: not even a focus re-checks it
+  const ttl = merged ? Infinity : refresh ? PR_FOCUS_MIN_AGE_MS : settled ? PR_SETTLED_TTL_MS : PR_TTL_MS;
   if (hit && "pr" in hit && age < ttl) return hit.pr;
   const previous = hit?.pr;
   savePrEntry(key, { v: PR_CACHE_VERSION, at: Date.now(), pr: previous });
@@ -595,8 +610,7 @@ function plan(cfg, session, state) {
         applyFormat(pr ? cfg.pr_format : cfg.format, {
           pr: pr ? pr.number : "",
           pr_title: pr ? pr.title : "",
-          ci: ciMark(pr),
-          review: (pr && REVIEW_MARKS[pr.review]) || "",
+          ...prMarks(pr),
           topic: body,
           agent: pane.agent || "",
           original: rec.original,

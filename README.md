@@ -68,9 +68,9 @@ or leave the sidebar alone.
 
 ## Spaces with a pull request
 
-If the branch checked out in the lead pane's directory has an **open** pull
-request on GitHub, the Space is named after the PR instead of the topic, with a
-mark for its CI:
+If the branch checked out in the lead pane's directory has an open or merged
+pull request on GitHub, the Space is named after the PR instead of the topic,
+with a mark for its state:
 
 ```text
 ✅ PR#232: feat(voice): run voice chat a…    every check passed
@@ -78,6 +78,7 @@ mark for its CI:
 🟡 PR#269: test(e2e): answer repeated m…    checks still running
 🔀 PR#255: feat(prism-client): publish…     merge conflicts, whatever CI says
 PR#271: docs: fix a typo in the READM…       no checks at all
+🟣 PR#116: feat(teams): add Microsoft Te…    merged
 ```
 
 A single failed check is enough for ❌, even while others are still running,
@@ -98,15 +99,19 @@ detached for the length of a rebase, so the plugin reads the branch being
 rebased from git instead.
 
 The lookup is `gh pr view` in that checkout, so it finds the PR the same way
-`gh` does from your shell, forks included. Draft PRs count; merged and closed
-ones do not, so a Space goes back to its topic once its PR is merged.
+`gh` does from your shell, forks included. Draft PRs count. A merged PR keeps
+its name with 🟣 as its only mark, since checks, conflicts and reviews no
+longer matter; a PR closed without merging counts as no PR, so that Space goes
+back to its topic.
 
 A PR and its checks come from the same lookup, which is refreshed:
 
 - **when you switch to the Space**, straight away;
 - **every 30 minutes or so** once its checks have settled on ✅ or ❌;
 - **every 2 minutes** while checks are still running, or while the branch has
-  no PR yet, so a result or a newly opened PR shows up quickly.
+  no PR yet, so a result or a newly opened PR shows up quickly;
+- **never again** once it is merged, not even on focus: a merged PR is final.
+  Its answer is kept for as long as the checkout exists.
 
 herdr has no timers for plugins, so "every" means on the next herdr event after
 that much time has passed. Any agent changing state or any focus change counts,
@@ -184,7 +189,7 @@ cp examples/default-config.toml "$(herdr plugin config-dir phorsmalahti.space-to
 | `source` | `"first"` | which pane speaks for the Space: `first` or `active` |
 | `fallback` | `"original"` | with no topic: `original`, `branch`, `cwd`, `keep` |
 | `format` | `"{topic}"` | `{topic} {agent} {original} {branch} {cwd} {number} {status}` |
-| `pr_format` | `"{review} {ci} PR#{pr}: {pr_title}"` | used instead of `format` when the branch has an open PR; adds `{pr} {pr_title} {review} {ci}`; `""` turns it off |
+| `pr_format` | `"{review} {ci} PR#{pr}: {pr_title}"` | used instead of `format` when the branch has an open or merged PR; adds `{pr} {pr_title} {review} {ci}`; `""` turns it off |
 | `max_label_length` | `40` | truncate after formatting (clamped 8–80) |
 | `respect_manual_names` | `true` | never overwrite a Space you renamed |
 | `require_agent` | `true` | only manage Spaces that host an agent |
